@@ -1149,6 +1149,128 @@ The detailed sections above are the canonical answers. This index maps the sampl
 | How to troubleshoot Azure network policy not working as expected? | [Troubleshooting](#85-troubleshoot-policy-not-working-as-expected) and [NAT/chain order](#86-loadbalancer-traffic-nat-and-placeazurechainfirst) |
 | How does a policy become rules on nodes? | [Node programming](#83-how-a-policy-becomes-node-rules) |
 
+### 10.1 Entra-enabled cluster: get pods returns an unexpected result
+
+**Feedback focus:** Locate the failing boundary before changing authentication or authorization settings.
+
+1. A customer enabled Microsoft Entra integration, but `kubectl get pods` does not return the expected pods. What information do you collect before deciding this is an authentication failure?
+2. How do you verify the active kubeconfig context, namespace, signed-in identity, and cluster configuration? Which fields in `aadProfile`, `enableRbac`, and `apiServerAccessProfile` distinguish the relevant access paths?
+3. How would `kubectl get pods -n <namespace> --v=8` help locate the failure? Which request URL, response status, error body, and timestamps matter, and what must be sanitized before sharing the output?
+4. How do you distinguish a credential-plugin failure, Entra sign-in failure, TCP timeout, TLS error, `401`, authorization `403`, and a successful empty PodList?
+5. Why does successfully downloading kubeconfig or signing in through a browser not prove permission to list pods?
+
+**Answer checkpoints:** `kubectl get pods` requires `list` on pods in the selected namespace; retrieving a named pod uses `get`. Confirm context, namespace, and any selectors before interpreting an empty result as an access failure. Verbose output is diagnostic evidence, not a reason to expose tokens or raw credentials.
+
+**Complete answers:** [Security boundaries](#1-core-concepts-and-security-boundaries), [request flow](#32-end-to-end-kubectl-get-nodes-flow), and [login/access troubleshooting](#38-troubleshooting-entra-cluster-login-and-access).
+
+### 10.2 Managed Entra authentication and the OBO flow
+
+**Feedback focus:** Explain the protocol interactions, not only "the webhook checks with Entra."
+
+1. Trace an Entra user's `kubectl get pods` from the kubeconfig exec entry through kubelogin, token acquisition, HTTPS, authentication, authorization, and the API response.
+2. What audience should the token sent to the Kubernetes API have? Why is an ARM or Microsoft Graph access token not interchangeable with that token?
+3. What is the distinction between kubelogin's `ExecCredential` response, a server-side TokenReview, and an authorization SubjectAccessReview?
+4. In a delegated OBO exchange, who is the client, middle tier, identity provider, and downstream API? What are the audiences of the incoming and outgoing tokens?
+5. Explain `assertion`, the middle tier's client credential, `requested_token_use=on_behalf_of`, requested scopes, and consent. Why does this exchange not itself grant permission to list pods?
+6. When can Guard use OBO for a downstream identity/group lookup? Why is it inaccurate to assume every kubectl request triggers a new OBO exchange or Graph request?
+7. How do device code, browser-based authorization code, and Azure CLI login modes differ? How can MFA or Conditional Access change the expected user interaction?
+
+**Answer checkpoints:** Separate client sign-in from server-side validation and optional delegated lookups. OBO preserves user context; workload identity federation uses a different, app-only client-credentials exchange. Managed implementation and caching details must be supported by evidence rather than inferred from a conceptual diagram.
+
+**Complete answers:** [Client/server contracts and Guard](#33-tokenreview-subjectaccessreview-and-guard), [protocol-level sign-in and OBO](#34-protocol-level-sign-in-and-obo), and [kubelogin modes](#37-kubelogin-login-modes).
+
+### 10.3 Precise RBAC diagnosis when Cluster Admin is present
+
+**Feedback focus:** Identify the actual identity, exact role, scope, and denied operation.
+
+1. A customer says, "I have Cluster Admin, but `kubectl get pods -n app` returns `403`." Which exact Azure role names do you ask them to distinguish, and why?
+2. What is the difference between **Azure Kubernetes Service Cluster Admin Role**, **Azure Kubernetes Service RBAC Cluster Admin**, and a Kubernetes `cluster-admin` ClusterRoleBinding?
+3. The customer's role assignment looks correct. How do you prove that kubectl is using the intended Entra identity rather than another exec login, a service account, or an admin certificate?
+4. Which checks distinguish a wrong principal/object ID, inactive PIM assignment, group-membership problem, namespace-only scope, insufficient `DataActions`, and assignment propagation?
+5. How do you use `kubectl auth can-i list pods -n app` and the actual API error together? What additional evidence is needed if the forbidden username is `system:anonymous`?
+6. Does assigning Azure **Contributor** fix every Kubernetes `403`? How do management-plane `Actions` differ from Kubernetes API `DataActions`?
+7. How do Kubernetes RBAC and Azure RBAC coexist? Why can inspecting Azure assignments alone miss a native Kubernetes grant?
+8. A privileged user can list pods but cannot create a particular pod. How do you distinguish an authorization failure from an admission-policy denial? Would `--admin` bypass authorized IP ranges or admission checks?
+
+**Answer checkpoints:** A role that permits downloading admin kubeconfig does not turn an existing Entra user kubeconfig into admin credentials. A valid AKS RBAC Cluster Admin assignment at cluster scope should grant Kubernetes authorization to its intended principal, but the wrong identity, credential failure, network boundary, or admission policy is a different problem. Do not prescribe Contributor or a broader allowlist without identifying the failing boundary.
+
+**Complete answers:** [Role-name distinctions](#23-built-in-role-names-that-are-easily-confused), [authorization composition](#24-authorization-composition), [user/admin credentials](#31-user-credentials-versus-admin-credentials), and [403 diagnosis](#38-troubleshooting-entra-cluster-login-and-access).
+
+### 10.4 Workload Identity and federated credential validation
+
+**Feedback focus:** Explain Issuer, Subject, Audience, and how the assertion is validated.
+
+1. A pod must read an Azure Key Vault secret. Which Azure identity, service account, pod configuration, federated credential, target-resource role, and application SDK behavior are required?
+2. What does **Issuer** identify, and where do you obtain its exact value? Why can omitting the trailing slash break federation?
+3. What does **Subject** identify? Construct the subject for service account `app-sa` in namespace `app`, and explain why moving the workload to another namespace changes the trust match.
+4. What is the projected assertion's **Audience**, and how does it differ from the audience/scope of the Entra token used to call Key Vault?
+5. How do OIDC discovery, JWKS, signing-key ID, signature, issuer, subject, audience, and token lifetime participate in validation? Why is merely decoding a JWT insufficient?
+6. Which pod label, service-account annotation, environment variables, and projected volume prove mutation occurred? Why does changing a Deployment label outside its pod template not configure new pods correctly?
+7. Explain why a federated credential does not grant access to Key Vault. If token acquisition succeeds but Key Vault returns `403`, which permission and network controls do you inspect?
+8. How do you distinguish a missing token file, `AADSTS70021`, `AADSTS90061`, an unsupported SDK, a credential chain choosing another identity, and failed token renewal?
+
+**Answer checkpoints:** For the example, the subject is `system:serviceaccount:app:app-sa`; the standard exchange audience is `api://AzureADTokenExchange`. The application exchanges a Kubernetes assertion for an Entra token and then calls Key Vault. Validate mutation, federation, resource authorization, and network access as separate stages; the AKS cluster does not automatically gain access on behalf of every pod.
+
+**Complete answers:** [Federated trust](#42-federation-flow-and-trust-configuration), [pod configuration](#43-minimal-service-account-and-pod-configuration), [token exchange](#44-protocol-level-exchange), and [troubleshooting](#46-troubleshooting-workload-identity).
+
+### 10.5 Authorized IP ranges and misleading access symptoms
+
+**Feedback focus:** Explain the supported behavior without assuming an undocumented NSG topology.
+
+1. What does an API-server authorized IP range protect, and which observed source IP must be included when the client uses a VPN, proxy, firewall, or NAT Gateway?
+2. The customer's workstation IP appears allowed, but kubectl times out. How do you verify the actual egress path, endpoint/DNS selection, all possible NAT addresses, CIDR membership, and propagation?
+3. Why is "the control plane has two NSGs, one allow and one deny" not a sufficient explanation of the feature or a basis for editing AKS-managed infrastructure?
+4. If the intended API endpoint returns a `403` naming the authenticated user and forbidden verb, why should you investigate authorization rather than assume the source IP was rejected?
+5. Does `az aks get-credentials --admin` bypass the authorized IP check? Does successful kubeconfig retrieval prove the API endpoint is reachable?
+
+**Answer checkpoints:** Describe the public API endpoint's source-address restriction and prove the observed traffic path. Internal implementation assumptions are not a customer configuration contract. Keep ARM credential retrieval, network access, and Kubernetes authorization separate.
+
+**Complete answers:** [Authorized-range scope](#51-what-they-protect), [source-address flow](#52-source-address-and-enforcement), and [allowed-source troubleshooting](#53-allowed-ip-still-cannot-connect).
+
+### 10.6 CVE validation and patch verification
+
+**Feedback focus:** Establish applicability and prove remediation rather than relying on image age.
+
+1. A scanner reports a CVE in AKS. How do you identify whether it belongs to a managed component, node OS, runtime binary, managed add-on, or customer image?
+2. The node image is less than 30 days old. Does that prove the CVE is fixed? What does the AKS guidance about vendor-fixed CVEs and updated images actually require you to verify?
+3. How do you use a scanner such as Trivy alongside vendor advisories, package revisions, image digests, node image versions, and the scanner database date?
+4. Why can an old-looking Ubuntu package version already contain a backported fix? Conversely, why does an updated OS package not prove that a statically linked Go binary such as `containerd` was rebuilt?
+5. Which evidence proves the fix is running on every affected node or pod after an upgrade? What changes if the vendor has not released a fix?
+
+**Answer checkpoints:** Neither "latest image" nor an age threshold is a universal guarantee. Confirm the affected artifact, vendor fix, deployed build, rollout completion, and rescan result. Distinguish Microsoft patch availability from customer deployment of that patch.
+
+**Complete answers:** [CVE triage](#61-triage-the-report-not-only-the-version-string), [ownership](#62-ownership-and-remediation), [deployed-version evidence](#63-prove-the-deployed-versions), and [remediation verification](#64-remediate-and-verify).
+
+### 10.7 Azure Policy components and assignment synchronization
+
+**Feedback focus:** Identify each component's responsibility and the source of truth.
+
+1. After enabling the Azure Policy add-on, which Azure-side settings and Kubernetes components do you expect, and what does each do?
+2. Explain the relationship between an Azure Policy definition, initiative, assignment, Gatekeeper ConstraintTemplate, and constraint.
+3. A customer installed Gatekeeper independently and now wants to enable the add-on. Is running both installations supported, and what documented migration checks are needed?
+4. A policy assignment exists in Azure but no corresponding constraint appears. How do you investigate scope, inheritance, synchronization, definition/template errors, identity, and required egress?
+5. Which constraint annotations identify the Azure definition and the actual assignment? Why is the definition ID alone insufficient when multiple assignments use the same definition?
+
+**Answer checkpoints:** Azure Policy synchronizes and reports; Gatekeeper performs matching admission evaluation and audit. Enabling the add-on is not equivalent to assigning every built-in policy. Inspect synchronization evidence and update Azure-managed artifacts at their supported source of truth.
+
+**Complete answers:** [Architecture](#71-architecture-and-installed-components), [policy objects](#72-definition-initiative-assignment-and-constraint), [effective assignments](#73-are-policies-automatically-applied), and [policy diagnostics](#76-troubleshoot-policy-ingestion-enforcement-and-reporting-separately).
+
+### 10.8 Azure Policy enforcement, running pods, and exemptions
+
+**Feedback focus:** Explain admission-time enforcement separately from audit and compliance reporting.
+
+1. A deny policy is assigned, but existing noncompliant pods are still running. Why is this expected, and what can happen when a replacement pod is created?
+2. A Deployment is accepted, but no pods start. Which ReplicaSet events and webhook/constraint messages distinguish admission denial from scheduling or image-pull failure?
+3. Is `audit` a policy effect? How does it differ from `deny`, `disabled`, and an assignment with enforcement disabled? Why is "only effect makes a policy work" an incorrect distinction?
+4. A new noncompliant pod is accepted. How do you check the effective assignment, policy parameters, namespace exclusions, match selectors, exemptions, enforcement settings, webhook configuration, and synchronization time?
+5. How do Azure scope exclusions (`notScopes`), policy exemptions, and Kubernetes namespace exclusions differ? At which layer do you inspect each rather than assuming a single exemption switch in the definition?
+6. The portal still shows noncompliance after a fix. How do you correlate the audit timestamp, current constraint violations, add-on reporting cycle, and the resource's actual current state?
+7. Can a user with cluster-admin authorization still be blocked by Gatekeeper? Why does passing `kubectl auth can-i` not prove that a proposed object will pass admission?
+
+**Answer checkpoints:** Audit reports; deny rejects matching requests when enforcement applies. Neither automatically evicts preexisting pods. Exclusions and exemptions change evaluation scope or treatment, while reporting is asynchronous. Separate admission evidence from an older compliance result.
+
+**Complete answers:** [Compliance mappings](#74-find-noncompliant-kubernetes-resources), [existing pods and admission](#75-why-noncompliant-pods-can-keep-running), [enforcement troubleshooting](#76-troubleshoot-policy-ingestion-enforcement-and-reporting-separately), and [Policy versus RBAC](#78-azure-policy-versus-rbac).
+
 ---
 
 ## 11. Command reference
