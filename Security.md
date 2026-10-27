@@ -420,7 +420,7 @@ Keep the identity scenarios separate:
 
 A managed identity is the Azure identity. Workload identity federation is a way for a pod to authenticate **as** a configured identity. These are complementary, not competing concepts.
 
-The default workload identity path does not require the application to use the node identity or intercept the Instance Metadata Service (IMDS).
+Workload Identity still requires namespace isolation, service-account governance, and least-privilege Azure roles.
 
 ### 4.2 Federation flow and trust configuration
 
@@ -524,20 +524,7 @@ This is schematic; the SDK performs encoding and credential handling. Sovereign 
 
 The application sends the returned Entra token to Key Vault. Key Vault then independently evaluates data-plane authorization and firewall/private-endpoint controls. Successful federation does not prove the subsequent service request is authorized or routable.
 
-### 4.5 Workload Identity versus Pod Identity
-
-| Aspect | Legacy AAD Pod Identity | Workload Identity |
-|---|---|---|
-| Credential path | NMI intercepts IMDS requests; MIC coordinates identity assignment | Projected service-account assertion exchanged through OIDC federation |
-| Node dependency | Node identity assignment and IMDS interception | Standard federation; no NMI/MIC requirement |
-| Trust binding | Pod identity resources and assignment machinery | Issuer, namespace/service-account subject, audience |
-| Application | Managed-identity/IMDS-oriented client | Workload-identity-capable SDK or supported migration approach |
-| Portability | Azure-specific node machinery | Federation model usable across supported Kubernetes environments |
-| Credential management | No app secret, but node/identity assignment complexity | No app secret; explicit federated trust and resource roles |
-
-AAD Pod Identity is deprecated. Do not design new systems around NMI/MIC. Workload Identity reduces node coupling and identity-assignment complexity; it does not eliminate the need for namespace isolation, service-account governance, or least-privilege Azure roles.
-
-### 4.6 Enable and disable behavior
+### 4.5 Enable and disable behavior
 
 On supported AKS Standard clusters, enable both capabilities after creation:
 
@@ -555,7 +542,7 @@ Important lifecycle differences:
 - Newly created Standard clusters on Kubernetes 1.34 and later enable OIDC by default; existing clusters are not automatically enabled just by reaching that version.
 - AKS Automatic preconfigures OIDC and workload identity. Check its managed configuration rules rather than applying every Standard lifecycle operation.
 
-### 4.7 Troubleshooting workload identity
+### 4.6 Troubleshooting workload identity
 
 Collect evidence before changing the webhook or restarting pods:
 
@@ -1133,7 +1120,7 @@ Record UTC time, request/correlation IDs, cluster/pool/component versions, the e
 
 ## 10. Interview question index
 
-The detailed sections above are the canonical answers. This index maps every requested sample question to its complete answer.
+The detailed sections above are the canonical answers. This index maps the sample questions covered in this guide to their complete answers.
 
 | Topic / sample question | Complete answer |
 |---|---|
@@ -1148,9 +1135,8 @@ The detailed sections above are the canonical answers. This index maps every req
 | How does managed Entra leverage kubelogin? | [Managed integration](#25-managed-entra-integration) and [client/server contracts](#33-tokenreview-subjectaccessreview-and-guard) |
 | Describe kubelogin login modes. | [Login modes](#37-kubelogin-login-modes) |
 | What is Workload Identity and how does it work? | [Identity scenarios](#41-what-workload-identity-is), [federation flow](#42-federation-flow-and-trust-configuration), and [exchange](#44-protocol-level-exchange) |
-| What advantages does it have over Pod Identity? | [Comparison](#45-workload-identity-versus-pod-identity) |
-| How to troubleshoot environment variables, mutation, and federation? | [Workload identity troubleshooting](#47-troubleshooting-workload-identity) |
-| Can OIDC issuer / workload identity be enabled or disabled after creation? | [Lifecycle behavior](#46-enable-and-disable-behavior) |
+| How to troubleshoot environment variables, mutation, and federation? | [Workload identity troubleshooting](#46-troubleshooting-workload-identity) |
+| Can OIDC issuer / workload identity be enabled or disabled after creation? | [Lifecycle behavior](#45-enable-and-disable-behavior) |
 | What are authorized IP ranges and how do they work? | [Scope](#51-what-they-protect) and [source-address flow](#52-source-address-and-enforcement) |
 | Why can an allowed IP still be blocked? | [Allowed IP troubleshooting](#53-allowed-ip-still-cannot-connect) |
 | What should be considered when a customer reports an AKS CVE? | [Triage](#61-triage-the-report-not-only-the-version-string), [ownership](#62-ownership-and-remediation), and [verification](#64-remediate-and-verify) |
